@@ -32,16 +32,23 @@
 		    display: flex;
 		    flex-wrap: wrap;
         }
-        #startSteamBtn{display: none;}
+        #startSteamBtn{
+        	display: none;
+        }
         .subimg{max-width: 100%; width: 500px;display: none;}
-        
+        #endSteamBtn{
+        	display: none;
+        }
+        .visible{display: block;}
+        .flex_div{display: flex;gap: 20px;}
     </style>
 </head>
 <body>
-	<div>
+	<div class="flex_div">
 		<input type="number" id="roomIdInput" placeholder="회의실 번호를 입력해주세요" max="999"/>
 		<button type="button" id="enterRoomBtn">입장하기</button>
 		<button type="button" id="startSteamBtn">화면 켜기</button>
+		<button type="button" id="endSteamBtn">화면 끄기</button>
 	</div>
 	
 	<!-- 내 화면 엘리먼트 -->

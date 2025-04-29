@@ -8,7 +8,11 @@ import org.springframework.messaging.handler.annotation.SendTo;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 @Slf4j
 @RestController
@@ -34,7 +38,7 @@ public class SignalingController {
 		return candidate;
 	}
 
-	
+	//
 	@MessageMapping("/peer/answer/{camKey}/{roomId}")
 	@SendTo("/topic/peer/answer/{camKey}/{roomId}")
 	public String PeerHandleAnswer(@Payload String answer, @DestinationVariable(value = "roomId") String roomId,
@@ -65,4 +69,58 @@ public class SignalingController {
 		log.info("[CHAT] {} in room {}: {}", message.get("sender"), roomId, message.get("message"));
 		return message;
 	}
+	
+	private final Map<String, List<String>> roomParticipants = new ConcurrentHashMap<>();
+	
+	//입장 메시지 처리
+	@MessageMapping("/chat/join/{roomId}")
+    @SendTo("/topic/chat/join/{roomId}")
+    public Map<String, String> joinChatMessage(@Payload Map<String, String> message, @DestinationVariable String roomId){
+        String sender = message.get("sender");
+        roomParticipants.computeIfAbsent(roomId, k -> new CopyOnWriteArrayList<>()).add(sender);
+        log.info("[CHAT] {} join room {}: {}", sender, roomId, message.get("message"));
+        return message;
+    }
+	
+	// 퇴장 메시지 처리
+	@MessageMapping("/chat/leave/{roomId}")
+    @SendTo("/topic/chat/leave/{roomId}")
+    public Map<String, String> handleLeaveMessage(@Payload Map<String, String> message, @DestinationVariable String roomId) {
+        String key = message.get("key");
+        List<String> participants = roomParticipants.get(roomId);
+        if (participants != null) {
+            participants.remove(key);
+            if (participants.isEmpty()) {
+                roomParticipants.remove(roomId);
+            }
+        }
+        log.info("[LEAVE] {} in room {}", key, roomId);
+        Map<String, String> leaveMessage = new HashMap<>();
+        leaveMessage.put("sender", key);
+        leaveMessage.put("message", " 님이 퇴장하셨습니다.");
+        return leaveMessage;
+    }
+	
+	// 화면 켜짐 알림 처리
+    @MessageMapping("/stream/start/{roomId}")
+    @SendTo("/topic/stream/start/{roomId}")
+    public Map<String, String> handleStreamStart(@Payload Map<String, String> message, @DestinationVariable String roomId) {
+        String key = message.get("key");
+        log.info("[STREAM START] {} in room {}", key, roomId);
+        return message; // 켜짐 알림을 다른 클라이언트들에게 전달
+    }
+	
+	/*
+	 * // 스트림 종료 알림 처리
+	 * 
+	 * @MessageMapping("/stream/end/{roomId}")
+	 * 
+	 * @SendTo("/topic/stream/end/{roomId}") public Map<String, String>
+	 * handleStreamEnd(@Payload Map<String, String> message, @DestinationVariable
+	 * String roomId) { String key = message.get("key"); // (선택 사항) 스트림 종료 시
+	 * roomParticipants에서 제거할지 여부 결정 // List<String> participants =
+	 * roomParticipants.get(roomId); // if (participants != null) { //
+	 * participants.remove(key); // } log.info("[STREAM END] {} in room {}", key,
+	 * roomId); return message; // 종료 알림을 다른 클라이언트들에게 전달 }
+	 */
 }

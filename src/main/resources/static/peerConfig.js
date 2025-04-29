@@ -1,12 +1,13 @@
 // let remoteStreamElement = document.querySelector('#remoteStream');
-let localStreamElement = document.querySelector('#localStream');
 //const myKey = Math.random().toString(36).substring(2, 11);
-let myKey = "";
-let pcListMap = new Map();
-let username = "";
-let roomId;
-let otherKeyList = [];
-let localStream = undefined;
+//let username = ""; 
+
+let localStreamElement = document.querySelector('#localStream');
+let myKey = ""; //사용자가 이름 저장하기위함
+let roomId; // 회의실 번호
+let pcListMap = new Map(); // 접속해있는 브라우저?사람? 의 키가 저장될 변수
+let otherKeyList = []; // 접속해있는 브라우저?사람? 의 키가 저장될 변수
+let localStream = undefined; //자신의 웹캠과 마이크로부터 얻은 미디어 스트림을 저장 하기위한 변수
 let stompClient = null; // stompClient 변수를 전역으로 선언
 
 const chatArea = document.querySelector('#chatArea');
@@ -26,6 +27,7 @@ const fn_setname = () => {
 fn_setname();
 // 채팅 이름 설정----------- end
 
+//스트림 시작시 내 미디어 장치에 연결 및 송신하기위한 함수
 const startCam = async () =>{
     if(navigator.mediaDevices !== undefined){
         await navigator.mediaDevices.getUserMedia({ audio: true, video : true })
@@ -35,10 +37,12 @@ const startCam = async () =>{
 				//웹캠, 마이크의 스트림 정보를 글로벌 변수로 저장한다.
                 localStream = stream;
                 // Disable the microphone by default
+				// 기본적으로 마이크 비활성화
 				//음향
                 stream.getAudioTracks()[0].enabled = true;
                 localStreamElement.srcObject = localStream;
                 // Connect after making sure that local stream is availble
+				//로컬 스트림이 사용 가능한지 확인한 후 연결하세요.
 
             }).catch(error => {
                 console.error("Error accessing media devices:", error);
@@ -47,14 +51,23 @@ const startCam = async () =>{
 
 }
 
-// 소켓 연결
+// 소켓 연결 함수
 const connectSocket = async () =>{
     const socket = new SockJS('/signaling');
     stompClient = Stomp.over(socket);
     stompClient.debug = null;
-
+	
+	console.log('pcListMap {}',pcListMap );
+	console.log('otherKeyList {}',otherKeyList );
+	
     stompClient.connect({}, function () {
+		document.querySelector('#startSteamBtn').style.display = 'block';
         console.log('Connected to WebRTC server');
+		
+		stompClient.send(`/app/chat/join/${roomId}`, {}, JSON.stringify({
+            sender: myKey,
+            message: "님이 입장했슴둥"
+        }));
 
 		//iceCandidate peer 교환을 위한 subscribe
         stompClient.subscribe(`/topic/peer/iceCandidate/${myKey}/${roomId}`, candidate => {
@@ -108,12 +121,73 @@ const connectSocket = async () =>{
         // 채팅 메시지 수신
         stompClient.subscribe(`/topic/chat/${roomId}`, message => {
             const receivedMessage = JSON.parse(message.body);
-            displayChatMessage(`${receivedMessage.sender}` ,`${receivedMessage.message}`);
+            displayChatMessage(`${receivedMessage.sender}` ,`: ${receivedMessage.message}`);
         });
+		
+		// 입장 메시지 수신
+       stompClient.subscribe(`/topic/chat/join/${roomId}`, message => {
+           const receivedMessage = JSON.parse(message.body);
+           displayChatMessage(`${receivedMessage.sender}` ,`${receivedMessage.message}`);
+       });
+	   
+	   // 퇴장 이벤트 구독
+       stompClient.subscribe(`/topic/chat/leave/${roomId}`, message => {
+			const receivedMessage = JSON.parse(message.body);
+		    const leaverKey = receivedMessage.sender;
+		    const leaveMessage = receivedMessage.message;
+		    if (pcListMap.has(leaverKey)) {
+		        pcListMap.get(leaverKey).close();
+		        pcListMap.delete(leaverKey);
+		        const remoteVideo = document.getElementById(leaverKey);
+		        if (remoteVideo) {
+		            remoteVideo.remove();
+		        }
+		        const index = otherKeyList.indexOf(leaverKey);
+		        if (index > -1) {
+		            otherKeyList.splice(index, 1);
+		        }
+		        displayChatMessage(leaverKey, leaveMessage);
+		    }
+       });
+	   
+	   // 화면 켜짐 알림 수신
+       stompClient.subscribe(`/topic/stream/start/${roomId}`, message => {
+           const starterKey = JSON.parse(message.body).key;
+           if (starterKey !== myKey) {
+               displayChatMessage("[알림]", `${starterKey} 님이 화면을 켰습니다.`);
+           }
+       });
+	   
+		//화면 공유 종료시 
+		// 스트림 종료 알림 수신
+		/*stompClient.subscribe(`/topic/stream/end/${roomId}`, message => {
+			const enderKey = JSON.parse(message.body).key;
+		    console.log('스트림 종료 알림 받음:', enderKey);
+		    if (pcListMap.has(enderKey)) {
+		        const pcToRemove = pcListMap.get(enderKey);
+		        pcToRemove.getSenders().forEach(sender => {
+		            if (sender.track && sender.track.kind !== 'data') {
+		                pcToRemove.removeTrack(sender);
+		            }
+		        });
+		        pcToRemove.close(); // 피어 연결 종료
+		        pcListMap.delete(enderKey);
+		        const remoteVideoToRemove = document.getElementById(enderKey);
+		        if (remoteVideoToRemove) {
+		            remoteVideoToRemove.remove();
+		        }
+		        const index = otherKeyList.indexOf(enderKey);
+		        if (index > -1) {
+		            otherKeyList.splice(index, 1);
+		        }
+		        displayChatMessage("[알림]", `${enderKey} 님이 화면을 껐습니다.`);
+		    }
+       });*/
 
     });
 }
 
+//화면 공유
 let onTrack = (event, otherKey) => {
     if(document.getElementById(`${otherKey}`) === null){
         const video =  document.createElement('video');
@@ -123,11 +197,9 @@ let onTrack = (event, otherKey) => {
         video.id = otherKey;
         video.srcObject = event.streams[0];
 
+		// 화면 켠 사람의 화면 가져오기
         document.getElementById('remoteStreamDiv').appendChild(video);
     }
-
-    // remoteStreamElement.srcObject = event.streams[0];
-    // remoteStreamElement.play();
 };
 
 const createPeerConnection = (otherKey) =>{
@@ -151,7 +223,9 @@ const createPeerConnection = (otherKey) =>{
     }
     return pc;
 }
-
+//WebRTC 통신에서 ICE (Interactive Connectivity Establishment) 후보를 처리하고 상대방에게 전송하는 역할
+// RTCPeerConnection객체에서 icecandidate 이벤트 발생시
+// ice candidate는 Internet Connectivity Establishment(인터넷 연결 생성)
 let onIceCandidate = (event, otherKey) => {
     if (event.candidate) {
         console.log('ICE candidate');
@@ -162,6 +236,7 @@ let onIceCandidate = (event, otherKey) => {
     }
 };
 
+//WebRTC 통신에서 SDP (Session Description Protocol) Offer를 생성하고 상대방에게 전송하는 역할
 let sendOffer = (pc ,otherKey) => {
     pc.createOffer().then(offer =>{
         setLocalAndSendMessage(pc, offer);
@@ -173,6 +248,7 @@ let sendOffer = (pc ,otherKey) => {
     });
 };
 
+//WebRTC 통신에서 SDP (Session Description Protocol) Answer를 생성하고 Offer를 보낸 상대방에게 전송하는 역할
 let sendAnswer = (pc,otherKey) => {
     pc.createAnswer().then( answer => {
         setLocalAndSendMessage(pc ,answer);
@@ -191,15 +267,16 @@ const displayChatMessage = (sender, message) => {
 		chatMessage += "<div>"+sender+" : "+message+"</div>";
 	*/
 	let ele = document.createElement('div');
-	let chatMessage = `${sender} : ${message}`
+	let chatMessage = `${sender} ${message}`
 	ele.innerHTML = chatMessage;
 	
-	let senderCheck = myKey == sender ? "mymessage" : "send"
+	let senderCheck = myKey == sender ? "mymessage" : "send";
 	ele.className = senderCheck
 	
     chatArea.appendChild(ele);
     chatArea.scrollTop = chatArea.scrollHeight; // 스크롤 하단으로 이동
 };
+
 //메시지 보내기
 const sendChatMessage = () => {
     const message = chatInput.value.trim();
@@ -219,6 +296,7 @@ const sendChatMessage = () => {
     }
 };
 
+//  WebRTC 통신에서 Offer 또는 Answer를 생성한 후, 해당 SDP를 자신의 로컬 피어 연결(RTCPeerConnection) 객체에 설정하는 역할
 const setLocalAndSendMessage = (pc ,sessionDescription) =>{
     pc.setLocalDescription(sessionDescription);
 };
@@ -233,7 +311,8 @@ chatInput.addEventListener('keypress', (event) => {
 
 //룸 번호 입력 후 캠 + 웹소켓 실행
 document.querySelector('#enterRoomBtn').addEventListener('click', async () =>{
-    await startCam();
+	//로컬 화면에 접근한다.
+    //await startCam();
 
     if(localStream !== undefined){
         document.querySelector('#localStream').style.display = 'block';
@@ -248,22 +327,133 @@ document.querySelector('#enterRoomBtn').addEventListener('click', async () =>{
 	}
 
     await connectSocket();
+	
+	// 새로운 피어 접속 후 (자신), 스트리밍 중인 피어에게 화면 공유 요청
+    setTimeout(() => {
+		
+		// WebSocket 연결 성공 후 키 요청
+	    if (stompClient && stompClient.connected) {
+	        stompClient.send(`/app/call/key`, {}, {});
+	    }
+		
+        if (localStream) { // 자신이 스트림을 켜고 있는 경우 다른 새 참여자는 자동으로 볼 수 있음 (기존 로직 유지)
+            otherKeyList.map((key) => {
+                if (!pcListMap.has(key)) {
+                    pcListMap.set(key, createPeerConnection(key));
+                    sendOffer(pcListMap.get(key), key);
+                }
+            });
+        } else { // 자신이 스트림을 안 켜고 있는 경우, 다른 스트리머에게 Offer 요청
+            otherKeyList.forEach(async (otherKey) => {
+                if (!pcListMap.has(otherKey)) {
+                    const newPc = createPeerConnection(otherKey);
+                    pcListMap.set(otherKey, newPc);
+                    sendOffer(newPc, otherKey); // 자신이 Offer를 보냄
+                }
+            });
+        }
+    }, 1500); // 약간의 딜레이 후 실행
 });
 
 // 스트림 버튼 클릭시 , 다른 웹 key들 웹소켓을 가져 온뒤에 offer -> answer -> iceCandidate 통신
 // peer 커넥션은 pcListMap 으로 저장
 document.querySelector('#startSteamBtn').addEventListener('click', async () =>{
-    await stompClient.send(`/app/call/key`, {}, {});
+	if (!localStream) {
+	        await startCam(); // 카메라 및 마이크 접근
+	        if (localStream) {
+	            document.querySelector('#localStream').style.display = 'block'; // 로컬 화면 표시
+
+				// 화면 켜짐 알림 전송
+	            if (stompClient && stompClient.connected && roomId) {
+	                stompClient.send(`/app/stream/start/${roomId}`, {}, JSON.stringify({ key: myKey }));
+	                console.log('스트림 시작 알림 전송:', myKey);
+	            }
+				
+	            // 기존 연결된 피어들에게 새로운 스트림 트랙 추가 및 SDP 업데이트 요청
+	            pcListMap.forEach((pc, key) => {
+	                localStream.getTracks().forEach(track => {
+	                    pc.addTrack(track, localStream);
+	                });
+	                // 상대방에게 SDP 재협상을 요청하는 Offer를 보냅니다.
+	                sendOffer(pc, key);
+	            });
+	        }
+	    } else {
+	        console.log('이미 화면이 켜져 있습니다.');
+	    }
+
+	    // 처음 연결 시의 Offer/Answer 교환 로직 (방 입장 후 초기 피어 연결 시도)
+	    if (localStream) { // 로컬 스트림이 있을 때만 초기 연결 시도
+	        await stompClient.send(`/app/call/key`, {}, {}); // 키 요청 (처음 연결 시 필요)
+	        setTimeout(() => {
+	            otherKeyList.map((key) => {
+	                if (!pcListMap.has(key)) {
+	                    pcListMap.set(key, createPeerConnection(key));
+	                    sendOffer(pcListMap.get(key), key);
+	                }
+	            });
+	        }, 1000);
+	    }
+		
+		// 신규 접속한 피어에게
+		// 지속적으로 신호 보내기.. 너무 부하가 심할거같아서 수정해야할듯함..
+		setInterval(() => {
+            otherKeyList.map((key) => {
+                if (!pcListMap.has(key)) {
+                    pcListMap.set(key, createPeerConnection(key));
+                    sendOffer(pcListMap.get(key), key);
+                }
+            });
+		}, 1000);
+	/*await stompClient.send(`/app/call/key`, {}, {});
 
     setTimeout(() =>{
-
         otherKeyList.map((key) =>{
             if(!pcListMap.has(key)){
                 pcListMap.set(key, createPeerConnection(key));
                 sendOffer(pcListMap.get(key),key);
             }
-
         });
+    },1000);*/
+});
 
-    },1000);
+// 화면 끄기 버튼 클릭시
+document.querySelector('#endSteamBtn').addEventListener('click', async () =>{
+	//  로컬 스트림 중단
+    if (localStream) {
+        localStream.getTracks().forEach(track => {
+            track.stop(); // 각 트랙(비디오, 오디오) 중단
+        });
+		
+        localStreamElement.srcObject = null; // 로컬 비디오 요소에서 스트림 제거
+        localStream = null; // localStream 변수 초기화
+        document.querySelector('#localStream').style.display = 'none'; // 로컬 화면 감추기
+
+        // 자신의 피어 연결에서 로컬 트랙 제거
+        pcListMap.forEach(pc => {
+            pc.getSenders().forEach(sender => {
+                if (sender.track && localStream && localStream.getTracks().includes(sender.track)) {
+                    pc.removeTrack(sender);
+                }
+            });
+        });
+    }
+
+    //원격 피어들에게 스트림 종료 알림 및 트랙 제거 (서버를 통해 알림)
+    if (stompClient && stompClient.connected && roomId) {
+        stompClient.send(`/app/stream/end/${roomId}`, {}, JSON.stringify({ key: myKey }));
+        console.log('스트림 종료 알림 전송:', myKey);
+    }
+});
+
+// 브라우저 종료 이벤트
+window.addEventListener('beforeunload', () => {
+    if (stompClient && stompClient.connected && roomId) {
+        stompClient.send(`/app/chat/leave/${roomId}`, {}, JSON.stringify({ key: myKey }));
+        // 브라우저 종료 시 자신의 피어 연결 정리
+        pcListMap.forEach(pc => {
+            pc.close();
+        });
+        pcListMap.clear();
+    }
 });

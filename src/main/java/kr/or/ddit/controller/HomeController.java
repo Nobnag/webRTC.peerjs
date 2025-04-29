@@ -13,10 +13,4 @@ public class HomeController {
 	public String home() {
 		return "index";
 	}
-	
-	// 웹소켓 페이지로 이동
-	@GetMapping("/websocket")
-	public String webSocket() {
-		return "websocket";
-	}
 }
